@@ -1,0 +1,10 @@
+# Local datasets and generated artifacts must not be committed.
+ieee-fraud-detection/
+artifacts*/
+*.joblib
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
