@@ -1,0 +1,44 @@
+# Alternative verified on Windows without directory sharing: Python runs on the host.
+name: fraud-bank-demo
+services:
+  kafka:
+    extends: {file: compose.yaml, service: kafka}
+  redis:
+    extends: {file: compose.yaml, service: redis}
+  clickhouse:
+    extends: {file: compose.yaml, service: clickhouse}
+  prometheus:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.observability
+      target: prometheus-host
+    ports: ['127.0.0.1:9090:9090']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    volumes: [prometheus-data:/prometheus]
+  grafana:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.observability
+      target: grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    ports: ['127.0.0.1:3000:3000']
+  ollama:
+    image: ollama/ollama:0.11.10
+    profiles: [llm]
+    ports: ['127.0.0.1:11434:11434']
+    volumes: [ollama-data:/root/.ollama]
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+volumes:
+  kafka-data:
+  redis-data:
+  clickhouse-data:
+  prometheus-data:
+  ollama-data:

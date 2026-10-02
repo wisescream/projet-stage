@@ -8,6 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+from sklearn.metrics import brier_score_loss
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -15,6 +16,10 @@ from sklearn.metrics import average_precision_score, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from threadpoolctl import threadpool_limits
+
+from fraud_detection.model_evaluation import (PlattCalibratedModel, apply_platt, calibration_bins,
+                                              fit_platt, threshold_cost_analysis)
+from fraud_detection.model_lifecycle import write_model_manifest
 
 LOG = logging.getLogger(__name__)
 ID = "TransactionID"
@@ -171,37 +176,65 @@ def train_pipeline(data_dir, output_dir, *, train_rows=None, validation_fraction
         load_identity(data_dir / "train_identity.csv"),
     )
     train, valid = chronological_split(frame, validation_fraction)
+    if len(frame) >= 1000:
+        fit_train, calibration = chronological_split(train, 0.05)
+    else:
+        fit_train, calibration = train, None
     model = build_model(features(frame).columns, max_iter=max_iter, seed=seed)
     with threadpool_limits(limits=threads):
-        LOG.info("Fitting validation model on %s rows; validating on %s later rows", len(train), len(valid))
-        model.fit(features(train), train[TARGET])
-        probabilities = model.predict_proba(features(valid))[:, 1]
+        LOG.info("Fitting validation model on %s rows, calibrating on %s, validating on %s later rows",
+                 len(fit_train), len(calibration) if calibration is not None else 0, len(valid))
+        model.fit(features(fit_train), fit_train[TARGET])
+        if calibration is not None:
+            calibration_raw = model.predict_proba(features(calibration))[:, 1]
+            calibrator = fit_platt(calibration_raw, calibration[TARGET])
+            calibration_max_time = float(calibration[TIME].max())
+        else:
+            calibrator = fit_platt([0.5, 0.5], [0, 1])
+            calibration_max_time = None
+        raw_probabilities = model.predict_proba(features(valid))[:, 1]
+        probabilities = apply_platt(calibrator, raw_probabilities)
+        validation_model = PlattCalibratedModel(model, calibrator)
         report = {
             "validation": {
                 "roc_auc": float(roc_auc_score(valid[TARGET], probabilities)),
                 "average_precision": float(average_precision_score(valid[TARGET], probabilities)),
                 "log_loss": float(log_loss(valid[TARGET], probabilities)),
+                "brier_score_raw": float(brier_score_loss(valid[TARGET], raw_probabilities)),
+                "brier_score_calibrated": float(brier_score_loss(valid[TARGET], probabilities)),
                 "fraud_rate": float(valid[TARGET].mean()),
                 "constant_baseline_roc_auc": 0.5,
                 "constant_baseline_average_precision": float(valid[TARGET].mean()),
-                "train_rows": len(train), "validation_rows": len(valid),
-                "train_max_time": float(train[TIME].max()),
+                "train_rows": len(fit_train), "calibration_rows": len(calibration) if calibration is not None else 0,
+                "validation_rows": len(valid),
+                "train_max_time": float(fit_train[TIME].max()),
+                "calibration_max_time": calibration_max_time,
+                "calibration_method": getattr(calibrator, "method", "platt_sigmoid"),
                 "validation_min_time": float(valid[TIME].min()),
+                "calibration_bins": calibration_bins(valid[TARGET], probabilities),
+                "threshold_cost_analysis": threshold_cost_analysis(valid[TARGET], probabilities),
             },
             "training": {
                 "rows_used": len(frame), "requested_row_limit": train_rows,
                 "validation_fraction": validation_fraction, "max_iter": max_iter,
                 "seed": seed, "threads": threads, "feature_count": len(model.feature_names_in_),
                 "split": "chronological", "refit_on_all_loaded_rows": True,
+                "training_time_min": float(frame[TIME].min()),
+                "training_time_max": float(frame[TIME].max()),
             },
             "versions": {"sklearn": sklearn.__version__, "pandas": pd.__version__, "numpy": np.__version__},
         }
         LOG.info("Validation ROC-AUC %.6f; average precision %.6f", report["validation"]["roc_auc"], report["validation"]["average_precision"])
         validation_predictions = valid[[ID, TARGET]].copy()
         validation_predictions["fraud_probability"] = probabilities
-        del train, valid
+        del train, fit_train, valid
+        if calibration is not None:
+            del calibration
         LOG.info("Refitting a fresh pipeline on all %s loaded training rows", len(frame))
         final_model = clone(model)
+        # Replay must use the holdout model, never the model refitted on its labels.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        joblib.dump(validation_model, output_dir / "model-validation.joblib", compress=3)
         del model
         final_model.fit(features(frame), frame[TARGET])
         del frame
@@ -210,6 +243,41 @@ def train_pipeline(data_dir, output_dir, *, train_rows=None, validation_fraction
         joblib.dump(final_model, output_dir / "model.joblib", compress=3)
     validation_predictions.to_csv(output_dir / "validation_predictions.csv", index=False)
     (output_dir / "metrics.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    write_model_manifest(output_dir / "model.joblib", output_dir, metrics=report["validation"],
+                         feature_names=final_model.feature_names_in_,
+                         training_period={"start": report["training"]["training_time_min"],
+                                          "end": report["training"]["training_time_max"],
+                                          "rows": report["training"]["rows_used"]},
+                         calibration_method=report["validation"]["calibration_method"])
+    return report
+
+
+def evaluate_rolling_pipeline(data_dir, output_dir, *, train_rows=None, folds=3,
+                              max_iter=100, seed=42, threads=4):
+    from fraud_detection.model_evaluation import rolling_temporal_evaluation
+
+    if train_rows is not None and train_rows < 1:
+        raise ValueError("train_rows must be positive")
+    if max_iter < 1 or threads < 1:
+        raise ValueError("max_iter and threads must be positive")
+    data_dir, output_dir = Path(data_dir), Path(output_dir)
+    frame = merge_identity(
+        read_table(data_dir / "train_transaction.csv", nrows=train_rows),
+        load_identity(data_dir / "train_identity.csv"),
+    )
+    report = rolling_temporal_evaluation(frame, folds=folds, max_iter=max_iter, seed=seed, threads=threads)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "rolling-evaluation.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    periods = []
+    for fold in report["folds"]:
+        periods.append({"fold": fold["fold"], "validation_start_time": fold["validation_start_time"],
+                        "validation_end_time": fold["validation_end_time"], "validation_rows": fold["validation_rows"],
+                        "fraud_rate": fold["calibrated"]["fraud_rate"],
+                        "raw_average_precision": fold["raw"]["average_precision"],
+                        "calibrated_average_precision": fold["calibrated"]["average_precision"],
+                        "raw_brier_score": fold["raw"]["brier_score"],
+                        "calibrated_brier_score": fold["calibrated"]["brier_score"]})
+    pd.DataFrame(periods).to_csv(output_dir / "rolling-periods.csv", index=False)
     return report
 
 

@@ -144,7 +144,12 @@ def test_train_predict_cli_end_to_end(data_dir, tmp_path):
     assert report["validation"]["roc_auc"] > 0.9
     assert report["validation"]["average_precision"] > report["validation"]["fraud_rate"]
     assert report["validation"]["train_max_time"] < report["validation"]["validation_min_time"]
+    assert report["validation"]["calibration_method"] in {"platt_sigmoid", "identity_insufficient_calibration_data"}
+    assert "threshold_cost_analysis" in report["validation"]
     assert report["submission_rows"] == 3
+    manifest = json.loads((output / "model-manifest.json").read_text())
+    assert manifest["sha256"] and manifest["feature_count"] == 7
+    assert manifest["training_period"]["rows"] == 120
     validation = pd.read_csv(output / "validation_predictions.csv")
     assert len(validation) == 24 and validation[ID].tolist() == list(range(1096, 1120))
     submission = pd.read_csv(output / "submission.csv")
@@ -154,6 +159,13 @@ def test_train_predict_cli_end_to_end(data_dir, tmp_path):
     model = joblib.load(output / "model.joblib")
     categories = model.named_steps["preprocess"].named_transformers_["categorical"].named_steps["encode"].categories_
     assert any("future" in c for c in categories)  # final refit includes validation rows
+    holdout_model = joblib.load(output / "model-validation.joblib")
+    holdout_categories = holdout_model.named_steps["preprocess"].named_transformers_["categorical"].named_steps["encode"].categories_
+    assert not any("future" in c for c in holdout_categories)
+    holdout_frame = merge_identity(read_table(data_dir / "train_transaction.csv"), load_identity(data_dir / "train_identity.csv"))
+    _, holdout_rows = chronological_split(holdout_frame, 0.2)
+    with threadpool_limits(limits=1):
+        np.testing.assert_allclose(holdout_model.predict_proba(features(holdout_rows))[:, 1], validation["fraud_probability"])
     second = tmp_path / "reloaded.csv"
     subprocess.run([sys.executable, "-m", "fraud_detection", "predict", "--data-dir", str(data_dir),
                     "--model", str(output / "model.joblib"), "--output", str(second),

@@ -1,0 +1,21 @@
+{
+  "uid": "banking-simulation",
+  "title": "Simulation bancaire — objectifs prototype, pas de SLA bancaire",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {"id": 1, "type": "timeseries", "title": "Transactions / seconde", "gridPos": {"x": 0, "y": 0, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(fraud_decisions_total[1m]))", "refId": "A"}]},
+    {"id": 2, "type": "timeseries", "title": "Latence API p50 / p95 / p99 (secondes)", "gridPos": {"x": 12, "y": 0, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "histogram_quantile(0.5, sum by(le)(rate(fraud_api_seconds_bucket[1m])))", "legendFormat": "p50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by(le)(rate(fraud_api_seconds_bucket[1m])))", "legendFormat": "p95 — objectif < 100 ms", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum by(le)(rate(fraud_api_seconds_bucket[1m])))", "legendFormat": "p99 — objectif < 250 ms", "refId": "C"}]},
+    {"id": 3, "type": "timeseries", "title": "Taux autorisation / revue / refus", "gridPos": {"x": 0, "y": 7, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by(decision)(rate(fraud_decisions_total[1m])) / ignoring(decision) group_left sum(rate(fraud_decisions_total[1m]))", "legendFormat": "{{decision}}", "refId": "A"}]},
+    {"id": 4, "type": "timeseries", "title": "Latence p95 Redis / traitement Kafka", "gridPos": {"x": 12, "y": 7, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "histogram_quantile(0.95, sum by(le)(rate(fraud_redis_seconds_bucket[1m])))", "legendFormat": "Redis", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by(le)(rate(fraud_kafka_processing_seconds_bucket[1m])))", "legendFormat": "Kafka traitement", "refId": "B"}]},
+    {"id": 5, "type": "timeseries", "title": "Disponibilité des scrapes (pas une mesure SLA)", "gridPos": {"x": 0, "y": 14, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "up", "legendFormat": "{{job}}", "refId": "A"}]},
+    {"id": 6, "type": "timeseries", "title": "Erreurs API / retries / dead letters", "gridPos": {"x": 12, "y": 14, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(fraud_api_requests_total{status!~\"2..\"}[1m]))", "legendFormat": "API", "refId": "A"}, {"expr": "sum by(kind)(rate(fraud_stream_errors_total[1m]))", "legendFormat": "{{kind}}", "refId": "B"}]},
+    {"id": 7, "type": "timeseries", "title": "Dérive des montants IEEE — PSI", "gridPos": {"x": 0, "y": 21, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "fraud_amount_psi", "refId": "A"}]},
+    {"id": 8, "type": "timeseries", "title": "Feedback différé IEEE (revue ou refus = positif)", "gridPos": {"x": 12, "y": 21, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "fraud_feedback_count", "legendFormat": "{{outcome}}", "refId": "A"}, {"expr": "fraud_unmatched_labels", "legendFormat": "labels non rapprochés", "refId": "B"}]},
+    {"id": 9, "type": "timeseries", "title": "Débit du replay Kafka (autorisations/s)", "gridPos": {"x": 0, "y": 28, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(fraud_kafka_messages_total{topic=\"transactions-incoming\",direction=\"consumed\"}[1m]))", "legendFormat": "replay consommé", "refId": "A"}]},
+    {"id": 10, "type": "timeseries", "title": "Kafka consumer lag (offsets en attente)", "gridPos": {"x": 12, "y": 28, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "fraud_kafka_consumer_lag", "legendFormat": "{{group}} / {{topic}} / {{partition}}", "refId": "A"}]},
+    {"id": 11, "type": "timeseries", "title": "Taux de revue / refus", "gridPos": {"x": 0, "y": 35, "w": 12, "h": 7}, "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(fraud_decisions_total{decision=~\"manual_review|decline\"}[1m])) / clamp_min(sum(rate(fraud_decisions_total[1m])), 1e-9)", "legendFormat": "transactions orientées vers revue/refus", "refId": "A"}]}
+  ]
+}

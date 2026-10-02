@@ -1,0 +1,19 @@
+{
+  "name": "fraud-decisions-clickhouse",
+  "config": {
+    "connector.class": "com.clickhouse.kafka.connect.ClickHouseSinkConnector",
+    "tasks.max": "1",
+    "topics": "fraud-decisions,payment-events,fraud-labels",
+    "hostname": "clickhouse",
+    "port": "8123",
+    "database": "default",
+    "username": "default",
+    "password": "${file:/etc/kafka-connect/secrets.properties:clickhouse.password}",
+    "table.name.format": "banking_events",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "errors.tolerance": "all",
+    "errors.deadletterqueue.topic.name": "fraud-connect-dead-letter",
+    "errors.deadletterqueue.context.headers.enable": "true"
+  }
+}

@@ -1,0 +1,9 @@
+FROM prom/prometheus:v3.5.0 AS prometheus
+COPY deploy/prometheus.yml /etc/prometheus/prometheus.yml
+COPY deploy/alerts.yml /etc/prometheus/alerts.yml
+FROM prom/prometheus:v3.5.0 AS prometheus-host
+COPY deploy/prometheus-host.yml /etc/prometheus/prometheus.yml
+COPY deploy/alerts.yml /etc/prometheus/alerts.yml
+FROM grafana/grafana:12.1.1 AS grafana
+COPY deploy/grafana/provisioning /etc/grafana/provisioning
+COPY deploy/grafana/dashboards /var/lib/grafana/dashboards

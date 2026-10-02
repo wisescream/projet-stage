@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!pyproject.toml
+!README.md
+!fraud_detection/
+!fraud_detection/**
+!deploy/
+!deploy/**
+!artifacts/
+!artifacts/model-validation.joblib
+!artifacts-replay/
+!artifacts-replay/features.sqlite
+!artifacts-replay/manifest.json
+**/__pycache__

@@ -1,0 +1,139 @@
+# LOCAL SIMULATION ONLY: no TLS/authentication/HA. Published ports are loopback-only.
+name: fraud-bank-demo
+services:
+  kafka:
+    image: redpandadata/redpanda:v25.2.9
+    command: [redpanda, start, --mode, dev-container, --smp, '1', --memory, 512M, --reserve-memory, 0M, --kafka-addr, 'internal://0.0.0.0:9092,external://0.0.0.0:19092', --advertise-kafka-addr, 'internal://kafka:9092,external://127.0.0.1:19092']
+    ports: ['127.0.0.1:19092:19092']
+    volumes: [kafka-data:/var/lib/redpanda/data]
+    healthcheck:
+      test: ['CMD', 'rpk', 'cluster', 'health']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --appendonly, 'yes', --appendfsync, always, --maxmemory-policy, noeviction]
+    ports: ['127.0.0.1:6379:6379']
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: '1'
+    ports: ['127.0.0.1:8123:8123']
+    volumes: [clickhouse-data:/var/lib/clickhouse]
+    healthcheck:
+      test: ['CMD', 'clickhouse-client', '--query', 'SELECT 1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  topics:
+    build: .
+    image: fraud-bank-demo:local
+    command: [python, -m, fraud_detection.simulation, create-topics]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      kafka: {condition: service_healthy}
+  api:
+    image: fraud-bank-demo:local
+    build: .
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      MODEL_PATH: /models/model-validation.joblib
+      FEATURE_DB: /bundle/features.sqlite
+      STATE_NAMESPACE: bank-demo
+      FRAUD_API_KEY: ${FRAUD_API_KEY:-}
+      REMOTE_LLM_URL: ${REMOTE_LLM_URL:-}
+      REMOTE_LLM_MODEL: ${REMOTE_LLM_MODEL:-}
+      REMOTE_LLM_API_KEY: ${REMOTE_LLM_API_KEY:-}
+    ports: ['127.0.0.1:8000:8000']
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  worker:
+    image: fraud-bank-demo:local
+    command: [python, -m, fraud_detection.simulation, worker]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      FRAUD_API_URL: http://api:8000
+    restart: on-failure
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      api: {condition: service_healthy}
+  sink:
+    image: fraud-bank-demo:local
+    command: [python, -m, fraud_detection.simulation, sink, --bundle, /bundle]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      CLICKHOUSE_HOST: clickhouse
+    restart: on-failure
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      clickhouse: {condition: service_healthy}
+  replay:
+    image: fraud-bank-demo:local
+    profiles: [demo]
+    command: [python, -m, fraud_detection.simulation, replay, --bundle, /bundle, --no-wait, --bootstrap, kafka:9092]
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      worker: {condition: service_started}
+      sink: {condition: service_started}
+  prometheus:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.observability
+      target: prometheus
+    volumes: [prometheus-data:/prometheus]
+    ports: ['127.0.0.1:9090:9090']
+  grafana:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.observability
+      target: grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes: [grafana-data:/var/lib/grafana]
+    ports: ['127.0.0.1:3000:3000']
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.7.1
+    profiles: [connect]
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: fraud-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _fraud_connect_configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _fraud_connect_offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _fraud_connect_status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    ports: ['127.0.0.1:8083:8083']
+    volumes:
+      - ./deploy/kafka-connect:/etc/kafka-connect:ro
+    depends_on:
+      kafka: {condition: service_healthy}
+volumes:
+  kafka-data:
+  redis-data:
+  clickhouse-data:
+  prometheus-data:
+  grafana-data:

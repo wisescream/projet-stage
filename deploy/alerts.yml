@@ -1,0 +1,38 @@
+groups:
+  - name: fraud-simulation
+    rules:
+      - alert: FraudApiUnavailable
+        expr: up{job="fraud-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Fraud scoring API is unavailable
+      - alert: KafkaConsumerLagHigh
+        expr: max(fraud_kafka_consumer_lag) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer backlog exceeds 100 offsets
+      - alert: FraudApiErrorRateHigh
+        expr: sum(rate(fraud_api_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(fraud_api_requests_total[5m])), 1e-9) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: Fraud API 5xx rate exceeds 5 percent
+      - alert: FraudFeatureDriftHigh
+        expr: fraud_amount_psi > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Replay amount PSI exceeds the prototype threshold
+      - alert: FraudLabelsUnmatched
+        expr: fraud_unmatched_labels > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Delayed fraud labels have no matching decision
