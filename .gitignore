@@ -1,10 +1,31 @@
-# Local datasets and generated artifacts must not be committed.
-ieee-fraud-detection/
-artifacts*/
+# Local input data and generated model/demo outputs.
+/ieee-fraud-detection/
+/artifacts*/
 *.joblib
+
+# Python environments, caches, and build outputs.
 .venv/
+venv/
 __pycache__/
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 build/
 dist/
+
+# Installed frontend/tooling dependencies.
+node_modules/
+
+# Local environment variables and operating-system temporary files.
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+~$*
+~WRL*.tmp
+*.tmp

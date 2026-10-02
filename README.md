@@ -68,13 +68,20 @@ python -m fraud_detection model-rollback
 ## Structure du depot
 
 ```text
-fraud_detection/       pipeline batch et services de simulation
-scripts/               controle et lancement de demonstrations
-tests/                 tests automatises
-docs/                  architecture, ML, streaming et exploitation
 deploy/                configuration Prometheus, Grafana et Kafka Connect
-ieee-fraud-detection/  donnees locales ignorees par Git
-artifacts*/            modeles, bundles et sorties locales ignores par Git
+fraud_detection/       code Python du produit
+	pipeline.py          entrainement, evaluation et prediction batch
+	model_*.py           comparaison, evaluation et cycle de vie des modeles
+	simulation/          API, scoring, replay, regles et analytics
+scripts/               lanceurs et controles operationnels
+tests/                 tests du pipeline et de la simulation
+docs/                  guides utilisateur, architecture et exploitation
+deploy/                Compose, Prometheus, Grafana et Kafka Connect
+artifacts*/            donnees generees localement, ignorees par Git
+ieee-fraud-detection/  donnees source locales, ignorees par Git
+compose*.yaml          variantes de la stack Docker Compose
+Dockerfile             image de l'application
+pyproject.toml         dependances, CLI et configuration de tests
 ```
 
 ## Documentation
